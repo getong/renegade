@@ -2,6 +2,7 @@
 
 mod account;
 mod admin;
+pub(super) mod asset_filter;
 mod balance;
 mod external_match;
 mod helpers;
@@ -80,6 +81,8 @@ use tokio::net::{TcpListener, TcpStream};
 use types_core::HmacKey;
 use util::get_current_time_millis;
 
+use self::asset_filter::AssetFilter;
+
 use crate::{
     auth::AuthType, http::external_match::processor::ExternalMatchProcessor, router::QueryParams,
 };
@@ -121,6 +124,9 @@ impl HttpServer {
         let bus = &config.system_bus;
         let matching_engine_worker_queue = &config.matching_engine_worker_queue;
         let task_queue = &config.task_queue;
+
+        // Resolve disabled asset tickers to addresses once
+        let asset_filter = AssetFilter::new(&config.disabled_assets);
 
         // --- Misc Routes --- //
 
@@ -172,7 +178,12 @@ impl HttpServer {
         router.add_account_authenticated_route(
             &Method::POST,
             CREATE_ORDER_ROUTE.to_string(),
-            CreateOrderHandler::new(executor, state.clone(), task_queue.clone()),
+            CreateOrderHandler::new(
+                executor,
+                asset_filter.clone(),
+                state.clone(),
+                task_queue.clone(),
+            ),
         );
 
         // GET /v2/account/:account_id/orders/:order_id
@@ -216,7 +227,7 @@ impl HttpServer {
         router.add_account_authenticated_route(
             &Method::POST,
             DEPOSIT_BALANCE_ROUTE.to_string(),
-            DepositBalanceHandler::new(state.clone(), task_queue.clone()),
+            DepositBalanceHandler::new(asset_filter.clone(), state.clone(), task_queue.clone()),
         );
 
         // POST /v2/account/:account_id/balances/:mint/withdraw
@@ -248,6 +259,7 @@ impl HttpServer {
         let admin_key = config.admin_api_key.unwrap_or_else(HmacKey::random);
         let processor = ExternalMatchProcessor::new(
             admin_key,
+            asset_filter.clone(),
             darkpool_client.clone(),
             bus.clone(),
             matching_engine_worker_queue.clone(),
@@ -271,8 +283,11 @@ impl HttpServer {
 
         // --- Market Routes (v2) --- //
 
-        let market_calculator =
-            MarketDataCalculator::new(state.clone(), config.price_streams.clone());
+        let market_calculator = MarketDataCalculator::new(
+            state.clone(),
+            config.price_streams.clone(),
+            asset_filter.clone(),
+        );
 
         // GET /v2/markets
         router.add_admin_authenticated_route(
@@ -299,7 +314,7 @@ impl HttpServer {
         router.add_unauthenticated_route(
             &Method::GET,
             GET_MARKET_PRICE_ROUTE.to_string(),
-            GetMarketPriceHandler::new(config.price_streams.clone()),
+            GetMarketPriceHandler::new(asset_filter.clone(), config.price_streams.clone()),
         );
 
         // --- Metadata Routes (v2) --- //
@@ -308,7 +323,11 @@ impl HttpServer {
         router.add_unauthenticated_route(
             &Method::GET,
             GET_EXCHANGE_METADATA_ROUTE.to_string(),
-            GetExchangeMetadataHandler::new(state.clone(), darkpool_client.clone()),
+            GetExchangeMetadataHandler::new(
+                asset_filter.clone(),
+                state.clone(),
+                darkpool_client.clone(),
+            ),
         );
 
         // --- Network Routes (v2) --- //

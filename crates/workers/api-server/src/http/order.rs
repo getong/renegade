@@ -21,7 +21,10 @@ use types_tasks::CancelOrderTaskDescriptor;
 
 use crate::{
     error::{ApiServerError, bad_request, conflict, not_found},
-    http::helpers::{append_create_order_task, append_task},
+    http::{
+        asset_filter::AssetFilter,
+        helpers::{append_create_order_task, append_task},
+    },
     param_parsing::{
         parse_account_id_from_params, parse_order_id_from_params, should_block_on_task,
     },
@@ -131,6 +134,8 @@ impl TypedHandler for GetOrderByIdHandler {
 pub struct CreateOrderHandler {
     /// The local relayer's executor address
     executor: Address,
+    /// Asset filter for checking disabled tokens
+    asset_filter: AssetFilter,
     /// A handle to the relayer's state
     state: State,
     /// The task driver queue
@@ -139,8 +144,13 @@ pub struct CreateOrderHandler {
 
 impl CreateOrderHandler {
     /// Constructor
-    pub fn new(executor: Address, state: State, task_queue: TaskDriverQueue) -> Self {
-        Self { executor, state, task_queue }
+    pub fn new(
+        executor: Address,
+        asset_filter: AssetFilter,
+        state: State,
+        task_queue: TaskDriverQueue,
+    ) -> Self {
+        Self { executor, asset_filter, state, task_queue }
     }
 }
 
@@ -159,6 +169,10 @@ impl TypedHandler for CreateOrderHandler {
         // Parse query and URL params
         let blocking = should_block_on_task(&query_params);
         let account_id = parse_account_id_from_params(&params)?;
+
+        // Check if either token in the order is disabled
+        let intent = &req.order.intent;
+        self.asset_filter.check_pair(&intent.in_token, &intent.out_token)?;
 
         // Check if order already exists
         let order_id = OrderId::from(req.order.id);

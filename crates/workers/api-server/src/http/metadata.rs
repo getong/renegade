@@ -8,11 +8,11 @@ use external_api::{
 };
 use hyper::HeaderMap;
 use state::State;
-use types_core::get_all_base_tokens;
 use util::on_chain::get_chain_id;
 
 use crate::{
     error::{ApiServerError, internal_error},
+    http::asset_filter::AssetFilter,
     router::{QueryParams, TypedHandler, UrlParams},
 };
 
@@ -22,6 +22,8 @@ use crate::{
 
 /// Handler for GET /v2/metadata/exchange
 pub struct GetExchangeMetadataHandler {
+    /// Asset filter for checking disabled tokens
+    asset_filter: AssetFilter,
     /// A handle to the relayer's state
     state: State,
     /// The darkpool client
@@ -30,8 +32,8 @@ pub struct GetExchangeMetadataHandler {
 
 impl GetExchangeMetadataHandler {
     /// Constructor
-    pub fn new(state: State, darkpool_client: DarkpoolClient) -> Self {
-        Self { state, darkpool_client }
+    pub fn new(asset_filter: AssetFilter, state: State, darkpool_client: DarkpoolClient) -> Self {
+        Self { asset_filter, state, darkpool_client }
     }
 }
 
@@ -52,7 +54,9 @@ impl TypedHandler for GetExchangeMetadataHandler {
         let executor_address = self.state.get_executor_key().map_err(internal_error)?.address();
         let relayer_fee_recipient = self.state.get_relayer_fee_addr().map_err(internal_error)?;
 
-        let supported_tokens = get_all_base_tokens()
+        let supported_tokens = self
+            .asset_filter
+            .enabled_base_tokens()
             .into_iter()
             .filter_map(|t| t.get_ticker().map(|sym| ApiToken::new(t.get_alloy_address(), sym)))
             .collect();

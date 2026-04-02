@@ -15,11 +15,12 @@ use hyper::HeaderMap;
 use price_state::PriceStreamStates;
 use state::State;
 use types_account::pair::Pair;
-use types_core::{Token, get_all_base_tokens};
+use types_core::Token;
 use util::on_chain::get_protocol_fee;
 
 use crate::{
     error::ApiServerError,
+    http::asset_filter::AssetFilter,
     param_parsing::parse_token_from_params,
     router::{QueryParams, TypedHandler, UrlParams},
 };
@@ -35,12 +36,24 @@ pub(super) struct MarketDataCalculator {
     state: State,
     /// The price stream states
     price_streams: PriceStreamStates,
+    /// Asset filter for checking disabled tokens
+    asset_filter: AssetFilter,
 }
 
 impl MarketDataCalculator {
     /// Constructor
-    pub fn new(state: State, price_streams: PriceStreamStates) -> Self {
-        Self { state, price_streams }
+    pub fn new(state: State, price_streams: PriceStreamStates, asset_filter: AssetFilter) -> Self {
+        Self { state, price_streams, asset_filter }
+    }
+
+    /// Reject if a token is disabled
+    fn check_token(&self, addr: &alloy::primitives::Address) -> Result<(), ApiServerError> {
+        self.asset_filter.check_token(addr)
+    }
+
+    /// Return enabled base tokens
+    fn enabled_base_tokens(&self) -> Vec<Token> {
+        self.asset_filter.enabled_base_tokens()
     }
 
     /// Get fee rates for a token
@@ -125,7 +138,7 @@ impl TypedHandler for GetMarketsHandler {
         _params: UrlParams,
         _query_params: QueryParams,
     ) -> Result<Self::Response, ApiServerError> {
-        let tokens = get_all_base_tokens();
+        let tokens = self.calculator.enabled_base_tokens();
         let markets =
             tokens.iter().filter_map(|t| self.calculator.get_market_info(t).ok()).collect();
         Ok(GetMarketsResponse { markets })
@@ -157,7 +170,7 @@ impl TypedHandler for GetMarketDepthsHandler {
         _params: UrlParams,
         _query_params: QueryParams,
     ) -> Result<Self::Response, ApiServerError> {
-        let tokens = get_all_base_tokens();
+        let tokens = self.calculator.enabled_base_tokens();
         let futs = tokens
             .iter()
             .map(|t| async { self.calculator.get_market_depth(t).await })
@@ -194,6 +207,7 @@ impl TypedHandler for GetMarketDepthByMintHandler {
         _query_params: QueryParams,
     ) -> Result<Self::Response, ApiServerError> {
         let token = parse_token_from_params(&params)?;
+        self.calculator.check_token(&token.get_alloy_address())?;
         let market_depth = self.calculator.get_market_depth(&token).await?;
         Ok(GetMarketDepthByMintResponse { market_depth })
     }
@@ -201,14 +215,16 @@ impl TypedHandler for GetMarketDepthByMintHandler {
 
 /// Handler for GET /v2/markets/:mint/price
 pub struct GetMarketPriceHandler {
+    /// Asset filter for checking disabled tokens
+    asset_filter: AssetFilter,
     /// The price stream states
     price_streams: PriceStreamStates,
 }
 
 impl GetMarketPriceHandler {
     /// Constructor
-    pub fn new(price_streams: PriceStreamStates) -> Self {
-        Self { price_streams }
+    pub fn new(asset_filter: AssetFilter, price_streams: PriceStreamStates) -> Self {
+        Self { asset_filter, price_streams }
     }
 }
 
@@ -225,6 +241,7 @@ impl TypedHandler for GetMarketPriceHandler {
         _query_params: QueryParams,
     ) -> Result<Self::Response, ApiServerError> {
         let token = parse_token_from_params(&params)?;
+        self.asset_filter.check_token(&token.get_alloy_address())?;
         let price: ApiTimestampedPrice = self.price_streams.peek_timestamped_price(&token)?.into();
         Ok(price)
     }
